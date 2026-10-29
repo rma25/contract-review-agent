@@ -44,7 +44,8 @@ docs/       Architecture notes, ADRs
 - Assume free-tier rate limits: handle 429s with backoff and keep calls small.
 
 ### Backend
-- Type hints everywhere. Lint and format with ruff; test with pytest.
+- Type hints everywhere. Lint and format with ruff; test with pytest against real Postgres (no SQLite).
+- Layering: `api` (thin routes) → `services` (logic) → `repositories` (DB access) → models. Every state change that matters writes an audit event in the same transaction, through `AuditRepository.append`.
 - Change the schema only through Alembic migrations. Never edit an applied migration.
 - Config comes from environment variables (see `.env.example`). Never hard-code secrets or commit `.env`.
 - Keep handlers thin; agent and domain logic live outside the FastAPI route layer so they can run in Lambda.
@@ -62,6 +63,13 @@ docs/       Architecture notes, ADRs
 ### Git
 - Conventional commit prefixes (`feat:`, `fix:`, `chore:`, `docs:`, `test:`, `refactor:`).
 
+## Commands (run from `backend/`)
+
+- `uv sync`: install dependencies
+- `uv run pytest`: tests (needs `docker compose up -d` from the repo root)
+- `uv run ruff check .` and `uv run ruff format .`: lint and format
+- `uv run alembic upgrade head`: apply migrations; `uv run alembic check` detects drift
+
 ## Current status
 
-Scaffolding only. Do not add feature code unless asked.
+The backend foundation is in place: the schema (contracts, clauses, risk_flags, reviews, append-only audit_events), `GET /health`, `POST /contracts`, and `GET /contracts/{id}`. There is no LLM or agent code yet; don't add any unless asked.
