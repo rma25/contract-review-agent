@@ -1,13 +1,13 @@
 import io
 import zipfile
-from collections.abc import Iterator
+from collections.abc import Callable, Iterator
 from pathlib import Path
 
 import pytest
 from alembic import command
 from alembic.config import Config
 from fastapi.testclient import TestClient
-from sqlalchemy import Engine, create_engine, text
+from sqlalchemy import Connection, Engine, create_engine, text
 from sqlalchemy.orm import Session
 
 from app.core.config import BACKEND_DIR, Settings, get_settings
@@ -40,23 +40,38 @@ def engine() -> Iterator[Engine]:
 
 
 @pytest.fixture
-def db_session(engine: Engine) -> Iterator[Session]:
-    """Session inside an outer transaction that is rolled back after each test.
-
-    App code may call commit(); with create_savepoint those commits only release a
-    SAVEPOINT, so nothing persists between tests.
-    """
+def db_connection(engine: Engine) -> Iterator[Connection]:
+    """A connection inside an outer transaction that is rolled back after each test."""
     connection = engine.connect()
     outer = connection.begin()
-    session = Session(
+    try:
+        yield connection
+    finally:
+        outer.rollback()
+        connection.close()
+
+
+def _savepoint_session(connection: Connection) -> Session:
+    # App code may call commit(); with create_savepoint those commits only release a
+    # SAVEPOINT inside the outer test transaction, so nothing persists between tests.
+    return Session(
         bind=connection, join_transaction_mode="create_savepoint", expire_on_commit=False
     )
+
+
+@pytest.fixture
+def db_session(db_connection: Connection) -> Iterator[Session]:
+    session = _savepoint_session(db_connection)
     try:
         yield session
     finally:
         session.close()
-        outer.rollback()
-        connection.close()
+
+
+@pytest.fixture
+def session_factory(db_connection: Connection) -> Callable[[], Session]:
+    """Factory for extra sessions (e.g. LLM audit writes) that share the test transaction."""
+    return lambda: _savepoint_session(db_connection)
 
 
 @pytest.fixture
