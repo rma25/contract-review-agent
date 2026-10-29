@@ -4,7 +4,7 @@ An AI agent that reviews contracts against a policy playbook, with a human in th
 
 Upload a contract (PDF or DOCX). The agent extracts its clauses, scores each one for risk against your playbook using tool calls, and sends anything it flags to a reviewer, who approves, edits, or rejects it. Every agent step is written to an audit log, and an eval suite measures how well the agent does.
 
-> **Status:** scaffolding only. No features are implemented yet.
+> **Status:** backend foundation in place (database schema, contract upload API, tests). No LLM or agent code yet.
 
 ## How a review works
 
@@ -41,11 +41,12 @@ This project has to run for $0. It uses only free tiers (Gemini free tier, Groq 
 
 ## Getting started
 
-Setup instructions will be added once the backend and frontend are scaffolded. For now:
-
-```bash
-cp .env.example .env   # then fill in your API keys
+```powershell
+docker compose up -d --wait        # Postgres 16
+Copy-Item .env.example .env        # then fill in your API keys
 ```
+
+Then follow [`backend/README.md`](backend/README.md) to install dependencies, run migrations, start the API, and run the tests.
 
 ## License
 
