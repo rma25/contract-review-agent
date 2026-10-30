@@ -1,6 +1,8 @@
 from functools import lru_cache
 from pathlib import Path
+from typing import Literal
 
+from pydantic import Field, SecretStr
 from pydantic_settings import BaseSettings, SettingsConfigDict
 
 BACKEND_DIR = Path(__file__).resolve().parents[2]
@@ -23,6 +25,24 @@ class Settings(BaseSettings):
     )
     upload_dir: Path = Path("./uploads")
     max_upload_mb: int = 25
+
+    # --- LLM ---
+    llm_provider: Literal["gemini", "groq", "ollama"] = "gemini"
+    llm_temperature: float | None = 0.0
+    llm_timeout_seconds: float = 60.0
+    llm_max_retries: int = Field(default=3, ge=0, le=10)
+    llm_retry_base_seconds: float = 1.0
+    llm_retry_max_seconds: float = 30.0
+
+    gemini_api_key: SecretStr = SecretStr("")
+    gemini_model: str = "gemini-2.5-flash"
+
+    groq_api_key: SecretStr = SecretStr("")
+    groq_model: str = "llama-3.3-70b-versatile"
+    groq_base_url: str = "https://api.groq.com/openai/v1"
+
+    ollama_base_url: str = "http://localhost:11434"
+    ollama_model: str = "llama3.1"
 
     @property
     def max_upload_bytes(self) -> int:

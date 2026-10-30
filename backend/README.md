@@ -12,6 +12,8 @@ app/
   schemas/       Pydantic request/response models
   repositories/  database access
   services/      business logic (uploads, file storage)
+  llm/           provider-agnostic LLM layer (adapters, retries, auditing)
+  prompts/       versioned prompt files: <name>/v<N>.md
 alembic/         migrations
 tests/           pytest suite (runs against a real Postgres test database)
 ```
@@ -83,12 +85,52 @@ Invoke-RestMethod http://localhost:8000/contracts/<id>
 
 Uploads are validated by extension *and* file content (PDF header, or a DOCX zip containing `word/document.xml`). They are stored under a server-generated name, never the client's filename.
 
+## LLM layer
+
+All model access goes through one entry point:
+
+```python
+from app.llm import Message, ToolSpec, get_llm_provider
+from app.prompts import load_prompt
+
+llm = get_llm_provider()  # adapter chosen by LLM_PROVIDER
+prompt = load_prompt("smoke")  # latest app/prompts/smoke/vN.md
+response = llm.chat(
+    [Message.system(prompt.render(word="pong")), Message.user("Go.")],
+    tools=None,  # list[ToolSpec] (JSON-schema parameters)
+    response_schema=None,  # Pydantic model or JSON schema -> JSON text
+    prompt=prompt,  # recorded in the audit event
+    contract_id=None,  # links the audit event to a contract
+)
+response.text, response.tool_calls, response.usage
+```
+
+| Provider | `LLM_PROVIDER` | Implementation | Key |
+|---|---|---|---|
+| Gemini (default) | `gemini` | `google-genai` SDK | free at [aistudio.google.com/apikey](https://aistudio.google.com/apikey) |
+| Groq | `groq` | `openai` SDK on Groq's OpenAI-compatible API | free at [console.groq.com/keys](https://console.groq.com/keys) |
+| Ollama | `ollama` | local HTTP API (`/api/chat`) | none; [install Ollama](https://ollama.com/download), then `ollama pull llama3.1` |
+
+- **Retries:** 429, 5xx, timeouts and connection errors are retried with exponential backoff and full jitter, honoring `Retry-After` (up to 60 s). Other 4xx errors fail immediately. Each SDK's own retries are turned off, so this is the only retry logic.
+- **Auditing:** every call writes an `llm.call.succeeded` or `llm.call.failed` audit event with provider, model, latency, attempts, token counts, finish reason, tool names, and prompt name, version and sha256.
+  - Message content, prompts, responses, API keys and raw error messages are **never** logged.
+  - Events are committed in their own transaction, so failures are recorded even if the caller rolls back. Commit a contract before making LLM calls that reference it.
+- **Prompts:** add a new `vN.md` file instead of editing a released one. Placeholders use `$name`, so JSON braces need no escaping.
+
 ## Tests, lint, format
 
 ```powershell
 uv run pytest
 uv run ruff check .
 uv run ruff format .
+```
+
+The LLM adapter tests use a mock HTTP transport (`httpx2.MockTransport`), so they make no network calls and need no API keys. CI runs exactly this.
+
+To check your real provider configuration, run the opt-in live smoke test. It uses `.env`, makes one small call, and skips if the selected provider has no key or Ollama isn't running:
+
+```powershell
+uv run pytest -m live
 ```
 
 The tests use `TEST_DATABASE_URL` (default `contract_review_test`). At the start of each run they drop and recreate its schema with the real Alembic migrations, and each test runs in a transaction that is rolled back afterwards. Postgres must be running.
@@ -120,3 +162,9 @@ Settings come from environment variables or the repo-root `.env` (see `.env.exam
 | `TEST_DATABASE_URL` | `postgresql+psycopg://contract:contract@localhost:5432/contract_review_test` |
 | `UPLOAD_DIR` | `./uploads` (relative to the working directory) |
 | `MAX_UPLOAD_MB` | `25` |
+| `LLM_PROVIDER` | `gemini` (`gemini`, `groq`, or `ollama`) |
+| `LLM_TEMPERATURE` / `LLM_TIMEOUT_SECONDS` | `0.0` / `60` |
+| `LLM_MAX_RETRIES` / `LLM_RETRY_BASE_SECONDS` / `LLM_RETRY_MAX_SECONDS` | `3` / `1.0` / `30.0` |
+| `GEMINI_API_KEY` / `GEMINI_MODEL` | empty / `gemini-2.5-flash` |
+| `GROQ_API_KEY` / `GROQ_MODEL` / `GROQ_BASE_URL` | empty / `llama-3.3-70b-versatile` / Groq's OpenAI endpoint |
+| `OLLAMA_BASE_URL` / `OLLAMA_MODEL` | `http://localhost:11434` / `llama3.1` |
