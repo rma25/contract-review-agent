@@ -202,6 +202,20 @@ def test_http_errors_are_mapped_without_sdk_retries(status: int, error_type: typ
     assert API_KEY not in str(info.value)
 
 
+def test_unknown_model_is_reported_by_name() -> None:
+    http = MockHTTP(
+        json_reply(404, {"error": {"code": 404, "message": "not found", "status": "NOT_FOUND"}})
+    )
+
+    with pytest.raises(LLMRequestError) as info:
+        _provider(http).chat([Message.user("x")])
+
+    assert str(info.value) == "gemini model not found: gemini-test"
+    assert info.value.status_code == 404
+    assert len(http.requests) == 1
+    assert API_KEY not in str(info.value)
+
+
 def test_timeout_is_a_retryable_server_error() -> None:
     http = MockHTTP(raise_timeout)
 

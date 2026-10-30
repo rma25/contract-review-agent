@@ -7,7 +7,13 @@ import httpx2
 from google import genai
 from google.genai import errors, types
 
-from app.llm.base import LLMError, LLMServerError, error_for_status, parse_retry_after
+from app.llm.base import (
+    LLMError,
+    LLMRequestError,
+    LLMServerError,
+    error_for_status,
+    parse_retry_after,
+)
 from app.llm.types import (
     ChatResponse,
     Message,
@@ -80,7 +86,7 @@ class GeminiProvider:
                 model=self.model, contents=contents, config=config
             )
         except errors.APIError as exc:
-            raise _map_api_error(exc) from None
+            raise _map_api_error(exc, self.model) from None
         except httpx2.TimeoutException:
             raise LLMServerError("gemini request timed out") from None
         except httpx2.TransportError as exc:
@@ -187,8 +193,10 @@ def _tool_response_payload(content: str) -> dict[str, Any]:
     return parsed if isinstance(parsed, dict) else {"result": parsed}
 
 
-def _map_api_error(exc: errors.APIError) -> LLMError:
+def _map_api_error(exc: errors.APIError, model: str) -> LLMError:
     status = exc.code or 0
+    if status == 404:
+        return LLMRequestError(f"gemini model not found: {model}", status_code=404)
     retry_after = None
     headers = getattr(exc.response, "headers", None)
     if headers is not None:
