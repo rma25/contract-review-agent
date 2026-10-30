@@ -1,6 +1,6 @@
 from typing import TYPE_CHECKING
 
-from sqlalchemy import BigInteger, String
+from sqlalchemy import BigInteger, String, Text
 from sqlalchemy.orm import Mapped, mapped_column, relationship
 
 from app.models.base import Base, TimestampMixin, UUIDPrimaryKeyMixin
@@ -22,6 +22,8 @@ class Contract(UUIDPrimaryKeyMixin, TimestampMixin, Base):
     status: Mapped[ContractStatus] = mapped_column(
         str_enum(ContractStatus, "contract_status"), default=ContractStatus.UPLOADED
     )
+    # Plain text extracted from the uploaded file; set during the extracting stage.
+    raw_text: Mapped[str | None] = mapped_column(Text, deferred=True)
 
     clauses: Mapped[list["Clause"]] = relationship(
         back_populates="contract", order_by="Clause.ordinal", cascade="all, delete-orphan"

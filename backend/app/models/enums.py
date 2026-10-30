@@ -5,8 +5,10 @@ from sqlalchemy import Enum
 
 class ContractStatus(StrEnum):
     UPLOADED = "uploaded"
-    PROCESSING = "processing"
-    IN_REVIEW = "in_review"
+    EXTRACTING = "extracting"
+    ANALYZING = "analyzing"
+    AWAITING_REVIEW = "awaiting_review"
+    # Reserved for when a human has resolved every flag. The agent never sets it.
     COMPLETED = "completed"
     FAILED = "failed"
 
