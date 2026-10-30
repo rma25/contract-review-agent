@@ -1,0 +1,60 @@
+# Expected review outcomes for the synthetic fixtures, keyed by fixture file.
+#
+# All parties are fictitious. These labels are what a future eval runner will score the
+# agent against (rule ids refer to backend/playbooks/default.yaml):
+#   must_flag      rule ids that should be flagged, with the minimum acceptable severity
+#   may_flag       rule ids where a flag is defensible either way (not scored as errors)
+#   must_not_flag  rule ids that should not be flagged
+#
+# Changing a fixture's text means re-checking its labels.
+
+playbook_version: 1
+
+fixtures:
+  low_risk_saas.md:
+    risk_level: low
+    must_flag: {}
+    may_flag: []
+    must_not_flag:
+      - liability-cap
+      - indemnification
+      - auto-renewal
+      - termination
+      - governing-law
+      - confidentiality
+      - payment-terms
+      - ip-ownership
+      - data-protection
+      - non-compete
+
+  medium_risk_services.md:
+    risk_level: medium
+    must_flag:
+      auto-renewal: medium      # 2-year auto-renewal, 120-day notice
+      payment-terms: medium     # net 15, 2% monthly late fee
+      termination: medium       # early-termination fee, asymmetric convenience notice
+      confidentiality: medium   # 6-month survival
+      ip-ownership: medium      # provider keeps paid-for deliverables
+    may_flag:
+      - data-protection         # 5 business days to notify a breach
+      - liability-cap           # indemnities carved out of the cap
+    must_not_flag:
+      - indemnification
+      - governing-law
+      - non-compete             # mutual staff non-solicit only
+
+  high_risk_vendor.md:
+    risk_level: high
+    must_flag:
+      liability-cap: high
+      indemnification: high
+      auto-renewal: medium
+      termination: high
+      confidentiality: medium
+      payment-terms: medium
+      ip-ownership: high
+      data-protection: critical
+      non-compete: high
+      governing-law: low
+    may_flag: []
+    must_not_flag: []

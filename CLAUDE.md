@@ -58,8 +58,17 @@ docs/       Architecture notes, ADRs
 - Config comes from environment variables (see `.env.example`). Never hard-code secrets or commit `.env`.
 - Keep handlers thin; agent and domain logic live outside the FastAPI route layer so they can run in Lambda.
 
+### Agent (`backend/app/agent`)
+- The pipeline is `run_analysis()` in `pipeline.py`: extract → segment (one structured-output call) → batched tool loop → `awaiting_review`. Keep it a plain function (no FastAPI imports) so it can run in Lambda.
+- Status changes go only through `ContractRepository.transition()`, which enforces `ALLOWED_TRANSITIONS` and audits. The agent never moves a contract past `awaiting_review`, and never sets a flag to anything but `pending`; `create_risk_flag` has no status argument.
+- Tools validate every argument and return `{"ok": false, "error": ...}` to the model instead of raising. Each call writes an `agent.tool_call` event; tool error messages must not echo contract text.
+- Agent audit payloads hold ids, counts, and codes only: no clause text, rationales, or search queries.
+- Every LLM call goes through `AgentBudget` (`before_call()` then `charge()`); limits come from the `AGENT_*` settings.
+- Tests script the model with `FakeLLMProvider` (`tests/agent/fake_llm.py`) wrapped in the real `AuditedLLMProvider`. Fixture contracts render to DOCX through `tests/contract_fixtures.py`.
+
 ### Playbook
 - Policy rules are data (YAML/JSON), not code, so they can change without a deploy.
+- Rules live in `backend/playbooks/default.yaml` and are validated by `app/playbook/loader.py`. Bump `version` when rules change; never rename or reuse a rule id (flags store it). `other` is a reserved clause type.
 
 ### Frontend
 - TypeScript strict mode, ESLint. API base URL comes from `VITE_API_BASE_URL`.
@@ -75,7 +84,7 @@ docs/       Architecture notes, ADRs
 
 - `uv sync`: install dependencies
 - `uv run pytest`: tests (needs `docker compose up -d` from the repo root)
-- `uv run pytest -m live`: opt-in smoke test against the real provider in `.env`
+- `uv run pytest -m live`: opt-in tests against the real provider in `.env` (`-k agent` for the end-to-end analysis only)
 - `uv run ruff check .` and `uv run ruff format .`: lint and format
 - `uv run alembic upgrade head`: apply migrations; `uv run alembic check` detects drift
 
@@ -85,4 +94,6 @@ docs/       Architecture notes, ADRs
   - Backend foundation: the schema (contracts, clauses, risk_flags, reviews, append-only audit_events), `GET /health`, `POST /contracts`, and `GET /contracts/{id}`.
   - CI: GitHub Actions runs ruff and pytest against Postgres 16 on pushes to main and on PRs.
   - The provider-agnostic LLM layer with Gemini, Groq and Ollama adapters.
-- **Not started:** agent logic (clause extraction, playbook scoring, review routing), frontend, evals. Don't add agent logic unless asked.
+  - The analysis agent: text extraction, clause segmentation, YAML playbook, tool-calling risk review with budgets, `POST /contracts/{id}/analyze` and `GET /contracts/{id}/flags`, and the contract status machine. See `docs/architecture.md`.
+  - Eval fixtures: three synthetic contracts and expected labels in `evals/fixtures/`.
+- **Not started:** human review actions (approve/edit/reject flags, `completed` status), frontend, the eval runner and metrics.
