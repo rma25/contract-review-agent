@@ -11,9 +11,12 @@ app/
   models/        SQLAlchemy 2.0 models
   schemas/       Pydantic request/response models
   repositories/  database access
-  services/      business logic (uploads, file storage)
+  services/      business logic (uploads, file storage, text extraction, starting analyses)
+  agent/         analysis pipeline: segmentation, tool-calling review loop, budgets
+  playbook/      playbook loader and validation
   llm/           provider-agnostic LLM layer (adapters, retries, auditing)
   prompts/       versioned prompt files: <name>/v<N>.md
+playbooks/       policy rules as YAML (default.yaml)
 alembic/         migrations
 tests/           pytest suite (runs against a real Postgres test database)
 ```
@@ -24,8 +27,8 @@ A request flows route → service → repository → session.
 
 | Table | Purpose |
 |---|---|
-| `contracts` | an uploaded file: original name, content type, storage key, size, sha256, status |
-| `clauses` | clauses extracted from a contract, in order |
+| `contracts` | an uploaded file: original name, content type, storage key, size, sha256, status, extracted text |
+| `clauses` | clauses extracted from a contract, in order, with heading, type, and a full-text search vector |
 | `risk_flags` | a playbook rule violation on a clause, with severity, score (0–1), rationale, and review status |
 | `reviews` | a human decision (approve / edit / reject) on a risk flag |
 | `audit_events` | an **append-only** log of every agent, human, and system step |
@@ -73,7 +76,12 @@ Try it:
 Invoke-RestMethod http://localhost:8000/health
 curl.exe -F "file=@C:\path\to\contract.pdf" http://localhost:8000/contracts
 Invoke-RestMethod http://localhost:8000/contracts/<id>
+Invoke-RestMethod -Method Post http://localhost:8000/contracts/<id>/analyze
+Invoke-RestMethod http://localhost:8000/contracts/<id>          # poll until status is awaiting_review
+Invoke-RestMethod http://localhost:8000/contracts/<id>/flags
 ```
+
+Synthetic sample contracts live in [`evals/fixtures/`](../evals/fixtures) as Markdown. Save one as `.docx` (for example, paste it into Word) to try the API by hand.
 
 ## Endpoints
 
@@ -81,7 +89,11 @@ Invoke-RestMethod http://localhost:8000/contracts/<id>
 |---|---|---|
 | `GET` | `/health` | API and database status. Returns 503 if the database is unreachable. |
 | `POST` | `/contracts` | Multipart upload (`file` field) of a `.pdf` or `.docx`. Saves it to `UPLOAD_DIR` and returns 201. Returns 415 for an unsupported or mismatched type, 413 if it is over `MAX_UPLOAD_MB`, and 400 if it is empty. |
-| `GET` | `/contracts/{id}` | A contract with its clauses. Returns 404 if not found. |
+| `GET` | `/contracts/{id}` | A contract with its clauses and status. Returns 404 if not found. |
+| `POST` | `/contracts/{id}/analyze` | Starts analysis in the background and returns 202 with the contract in `extracting`. Allowed from `uploaded` or `failed` (retry); otherwise 409. Returns 503 if the LLM provider is not configured, 404 if not found. |
+| `GET` | `/contracts/{id}/flags` | Risk flags for the contract, ordered by clause, each with its clause ordinal, type, and heading. Returns 404 if not found. |
+
+Status moves `uploaded → extracting → analyzing → awaiting_review`, or to `failed` from either working state. See [`docs/architecture.md`](../docs/architecture.md).
 
 Uploads are validated by extension *and* file content (PDF header, or a DOCX zip containing `word/document.xml`). They are stored under a server-generated name, never the client's filename.
 
@@ -117,6 +129,21 @@ response.text, response.tool_calls, response.usage
   - Events are committed in their own transaction, so failures are recorded even if the caller rolls back. Commit a contract before making LLM calls that reference it.
 - **Prompts:** add a new `vN.md` file instead of editing a released one. Placeholders use `$name`, so JSON braces need no escaping.
 
+## Agent
+
+`POST /contracts/{id}/analyze` runs `app.agent.run_analysis` as a background task:
+
+1. **Extract** text with pypdf (PDF) or python-docx (DOCX, including tables) and store it on the contract.
+2. **Segment** the text with one structured-output call (`clause_segmentation` prompt). The response schema restricts `clause_type` to the playbook's clause types plus `other`.
+3. **Review** clauses in batches of `AGENT_BATCH_SIZE`, one short conversation per batch (`risk_review` prompt), with three tools: `get_playbook_rules`, `search_similar_clauses` (Postgres full-text search over other contracts), and `create_risk_flag`.
+4. Move the contract to `awaiting_review`. Every flag is `pending`; the agent cannot approve anything.
+
+`AGENT_MAX_ITERATIONS` and `AGENT_TOKEN_BUDGET` cap LLM calls and tokens per contract; hitting either fails the contract with an `agent.stopped` audit event. Every tool call, flag, batch, and status change is audited (metadata only). The full event list is in [`docs/architecture.md`](../docs/architecture.md#audit-events).
+
+### Playbook
+
+Rules live in [`playbooks/default.yaml`](playbooks/default.yaml) (`PLAYBOOK_PATH` selects another file). Each rule has an `id`, `clause_type`, `title`, `description`, `risk_criteria`, and default `severity`. Edit the YAML to change policy; no code change is needed. Bump `version` when rules change, since flags and audit events record it. Rule ids are stored on flags, so never rename or reuse one. Adding a rule with a new `clause_type` also adds that type to segmentation.
+
 ## Tests, lint, format
 
 ```powershell
@@ -125,12 +152,13 @@ uv run ruff check .
 uv run ruff format .
 ```
 
-The LLM adapter tests use a mock HTTP transport (`httpx2.MockTransport`), so they make no network calls and need no API keys. CI runs exactly this.
+The LLM adapter tests use a mock HTTP transport (`httpx2.MockTransport`), and the agent tests use a scripted `FakeLLMProvider` (`tests/agent/fake_llm.py`) wrapped in the real audited provider. They make no network calls and need no API keys. CI runs exactly this.
 
 To check your real provider configuration, run the opt-in live smoke test. It uses `.env`, makes one small call, and skips if the selected provider has no key or Ollama isn't running:
 
 ```powershell
-uv run pytest -m live
+uv run pytest -m live            # all live tests
+uv run pytest -m live -k agent   # end-to-end analysis of the high-risk fixture (about 5 to 10 calls)
 ```
 
 The tests use `TEST_DATABASE_URL` (default `contract_review_test`). At the start of each run they drop and recreate its schema with the real Alembic migrations, and each test runs in a transaction that is rolled back afterwards. Postgres must be running.
@@ -165,6 +193,11 @@ Settings come from environment variables or the repo-root `.env` (see `.env.exam
 | `LLM_PROVIDER` | `gemini` (`gemini`, `groq`, or `ollama`) |
 | `LLM_TEMPERATURE` / `LLM_TIMEOUT_SECONDS` | `0.0` / `60` |
 | `LLM_MAX_RETRIES` / `LLM_RETRY_BASE_SECONDS` / `LLM_RETRY_MAX_SECONDS` | `3` / `1.0` / `30.0` |
-| `GEMINI_API_KEY` / `GEMINI_MODEL` | empty / `gemini-2.5-flash` |
+| `GEMINI_API_KEY` / `GEMINI_MODEL` | empty / `gemini-3.5-flash` |
 | `GROQ_API_KEY` / `GROQ_MODEL` / `GROQ_BASE_URL` | empty / `llama-3.3-70b-versatile` / Groq's OpenAI endpoint |
 | `OLLAMA_BASE_URL` / `OLLAMA_MODEL` | `http://localhost:11434` / `llama3.1` |
+| `PLAYBOOK_PATH` | `backend/playbooks/default.yaml` |
+| `AGENT_BATCH_SIZE` | `5` clauses per review conversation |
+| `AGENT_MAX_ITERATIONS` | `25` LLM calls per contract |
+| `AGENT_TOKEN_BUDGET` | `150000` tokens per contract |
+| `AGENT_MAX_CONTRACT_CHARS` | `60000` characters of extracted text |

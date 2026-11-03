@@ -1,7 +1,7 @@
 import uuid
 from typing import TYPE_CHECKING
 
-from sqlalchemy import CheckConstraint, Float, ForeignKey, String, Text
+from sqlalchemy import CheckConstraint, Float, ForeignKey, String, Text, UniqueConstraint
 from sqlalchemy.orm import Mapped, mapped_column, relationship
 
 from app.models.base import Base, TimestampMixin, UUIDPrimaryKeyMixin
@@ -14,7 +14,11 @@ if TYPE_CHECKING:
 
 class RiskFlag(UUIDPrimaryKeyMixin, TimestampMixin, Base):
     __tablename__ = "risk_flags"
-    __table_args__ = (CheckConstraint("score >= 0 AND score <= 1", name="score_range"),)
+    __table_args__ = (
+        CheckConstraint("score >= 0 AND score <= 1", name="score_range"),
+        # One flag per playbook rule per clause.
+        UniqueConstraint("clause_id", "rule_id"),
+    )
 
     clause_id: Mapped[uuid.UUID] = mapped_column(
         ForeignKey("clauses.id", ondelete="CASCADE"), index=True

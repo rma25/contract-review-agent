@@ -6,15 +6,17 @@ An AI agent that reviews contracts against a policy playbook, with a human in th
 
 Upload a contract (PDF or DOCX). The agent extracts its clauses, scores each one for risk against your playbook using tool calls, and sends anything it flags to a reviewer, who approves, edits, or rejects it. Every agent step is written to an audit log, and an eval suite measures how well the agent does.
 
-> **Status:** the backend foundation (database schema, contract upload API), CI, and a provider-agnostic LLM layer are in place. No agent logic yet.
+> **Status:** the backend, CI, the provider-agnostic LLM layer, and the analysis agent (text extraction, clause segmentation, playbook risk flags) are in place. Human review actions, the frontend, and the eval runner are next.
 
 ## How a review works
 
 1. **Upload:** a user uploads a PDF or DOCX contract.
-2. **Extract:** the agent splits the document into clauses and classifies each one (indemnity, liability cap, termination, and so on).
-3. **Score:** the agent checks each clause against the policy playbook through tool calls and assigns a risk score with a rationale.
+2. **Extract:** the text is pulled out of the file, and one LLM call splits it into clauses and classifies each one (indemnity, liability cap, termination, and so on).
+3. **Score:** the agent reviews clauses in small batches against the [policy playbook](backend/playbooks/default.yaml), using tool calls to read rules, look up similar past clauses, and create risk flags with a severity, score, and rationale.
 4. **Human review:** flagged clauses go to a reviewer, who approves, edits, or rejects each one. The agent never approves on its own.
 5. **Audit:** every LLM call, tool call, agent decision, and human action is appended to an audit log.
+
+See [`docs/architecture.md`](docs/architecture.md) for the agent flow, status machine, guards, and audit events.
 
 ## Stack
 

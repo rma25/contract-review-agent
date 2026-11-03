@@ -1,0 +1,141 @@
+# Default contract review playbook.
+#
+# Each rule tells the agent what to look for in one clause type. The agent flags a clause
+# only when it meets a rule's risk criteria; every flag goes to a human for review.
+#
+# Fields:
+#   id             stable identifier, recorded on every risk flag (never reuse or rename)
+#   clause_type    the clause type this rule applies to (also the segmentation vocabulary)
+#   title          short human-readable name
+#   description    what a reasonable position looks like
+#   risk_criteria  concrete conditions that make the clause risky
+#   severity       default severity when the criteria are met (low|medium|high|critical)
+#
+# Bump `version` whenever a rule changes so audit events show which playbook was applied.
+
+version: 1
+
+rules:
+  - id: liability-cap
+    clause_type: limitation_of_liability
+    title: Limitation of liability
+    description: >
+      Each party's liability should be capped (typically at 12 months of fees) and both
+      parties should exclude indirect and consequential damages, with mutual carve-outs.
+    risk_criteria:
+      - Our liability is uncapped, or capped far above fees paid (for example, more than 2x annual fees)
+      - The cap or the exclusion of consequential damages protects only the counterparty
+      - Carve-outs from the cap are broad enough to make the cap meaningless
+    severity: high
+
+  - id: indemnification
+    clause_type: indemnification
+    title: Indemnification
+    description: >
+      Indemnities should be mutual, limited to third-party claims, and tied to each party's
+      own breach, negligence, or IP infringement.
+    risk_criteria:
+      - We indemnify the counterparty with no reciprocal obligation
+      - The indemnity covers the counterparty's own negligence or misconduct
+      - The indemnity covers first-party losses, not just third-party claims
+      - Indemnity obligations are excluded from the liability cap
+    severity: high
+
+  - id: auto-renewal
+    clause_type: auto_renewal
+    title: Automatic renewal
+    description: >
+      Renewal should require affirmative action, or at least allow non-renewal on reasonable
+      notice (30 to 60 days) without renewal-term price increases.
+    risk_criteria:
+      - The contract renews automatically for a term longer than 12 months
+      - The non-renewal notice window exceeds 90 days or is very narrow
+      - Prices can increase on renewal without a cap
+    severity: medium
+
+  - id: termination
+    clause_type: termination
+    title: Termination rights
+    description: >
+      Both parties should be able to terminate for material breach after a cure period, and
+      we should be able to terminate for convenience on reasonable notice.
+    risk_criteria:
+      - Only the counterparty may terminate for convenience
+      - We have no right to terminate for the counterparty's material breach
+      - Termination triggers early-termination fees or acceleration of all remaining fees
+      - The cure period is under 15 days or absent
+    severity: high
+
+  - id: governing-law
+    clause_type: governing_law
+    title: Governing law and venue
+    description: >
+      Governing law and venue should be our home jurisdiction or a neutral, well-established
+      commercial jurisdiction.
+    risk_criteria:
+      - Exclusive venue is a remote or unfamiliar jurisdiction
+      - We waive the right to a jury trial or to join class actions while the counterparty does not
+      - Disputes go to binding arbitration chosen and administered solely by the counterparty
+    severity: low
+
+  - id: confidentiality
+    clause_type: confidentiality
+    title: Confidentiality
+    description: >
+      Confidentiality obligations should be mutual, with standard exclusions and a survival
+      period of at least 2 years (indefinite for trade secrets).
+    risk_criteria:
+      - Only we owe confidentiality obligations
+      - Obligations survive for less than 1 year after termination
+      - The counterparty may disclose our information to unnamed third parties
+    severity: medium
+
+  - id: payment-terms
+    clause_type: payment_terms
+    title: Payment terms
+    description: >
+      Payment should be due net 30 or longer, with modest late fees and a right to dispute
+      invoices in good faith.
+    risk_criteria:
+      - Payment is due in under 15 days or fully in advance for multi-year terms
+      - Late fees exceed 1.5% per month
+      - The counterparty may raise prices unilaterally during the term
+      - Fees are non-refundable even when the counterparty fails to perform
+    severity: medium
+
+  - id: ip-ownership
+    clause_type: ip_ownership
+    title: Intellectual property ownership
+    description: >
+      Each party should keep its pre-existing IP; we should own deliverables we pay for, and
+      any license we grant should be limited to performing the contract.
+    risk_criteria:
+      - The counterparty acquires ownership of our pre-existing IP or our data
+      - We do not own deliverables we pay to have created
+      - We grant a perpetual, irrevocable, or sublicensable license beyond the contract's purpose
+    severity: high
+
+  - id: data-protection
+    clause_type: data_protection
+    title: Data protection
+    description: >
+      Personal data must be processed only on our instructions, with appropriate security,
+      breach notification within 72 hours, and deletion or return at the end of the term.
+    risk_criteria:
+      - The counterparty may use our data for its own purposes (including training models)
+      - Breach notification is not required, or the deadline exceeds 72 hours
+      - There is no obligation to delete or return data at termination
+      - Data may be transferred or subprocessed without notice or consent
+    severity: critical
+
+  - id: non-compete
+    clause_type: non_compete
+    title: Non-compete and exclusivity
+    description: >
+      We should not be restricted from competing, hiring, or working with other vendors,
+      except for narrow non-solicitation of each other's staff.
+    risk_criteria:
+      - We may not do business with the counterparty's competitors
+      - A non-compete or exclusivity obligation survives termination by more than 12 months
+      - The restriction covers a broad geography or industry
+    severity: high
