@@ -6,7 +6,7 @@ from sqlalchemy.orm import Session
 
 from app.agent.tools import AgentTools
 from app.core.config import Settings
-from app.models import AuditEvent, Clause, Contract, FlagStatus, RiskFlag, Severity
+from app.models import AuditEvent, Clause, ClauseOutcome, Contract, FlagStatus, RiskFlag, Severity
 from app.playbook import load_playbook
 from tests.agent.conftest import MakeContract
 from tests.agent.fake_llm import call
@@ -118,6 +118,7 @@ def test_create_risk_flag_is_always_pending_and_audited(setup: Setup, db_session
         ({"clause_id": "00000000-0000-0000-0000-000000000000"}, "clause_not_in_batch"),
         ({"rule_id": "made-up-rule"}, "unknown_rule"),
         ({"severity": "extreme"}, "invalid_severity"),
+        ({"severity": ""}, "missing_severity"),
         ({"score": 1.5}, "invalid_score"),
         ({"score": "0.5"}, "invalid_score"),
         ({"score": True}, "invalid_score"),
@@ -224,3 +225,149 @@ def test_search_with_only_short_words_returns_nothing(setup: Setup) -> None:
     tools, _, _ = setup
     result = tools.execute(call("search_similar_clauses", text="a an the of"), batch=1)
     assert result == {"ok": True, "matches": []}
+
+
+def _flag(tools: AgentTools, clause: Clause) -> dict[str, object]:
+    return tools.execute(
+        call(
+            "create_risk_flag",
+            clause_id=str(clause.id),
+            rule_id="liability-cap",
+            severity="high",
+            score=0.8,
+            rationale="Uncapped liability.",
+        ),
+        batch=1,
+    )
+
+
+def _record(tools: AgentTools, clause: Clause, outcome: str, **overrides: object):
+    arguments = {"clause_id": str(clause.id), "outcome": outcome, "reason": "Balanced terms."}
+    return tools.execute(call("record_clause_reviewed", **(arguments | overrides)), batch=1)
+
+
+def test_record_clause_reviewed_stores_and_audits_the_decision(
+    setup: Setup, db_session: Session
+) -> None:
+    tools, contract, clauses = setup
+    _flag(tools, clauses[0])
+
+    flagged = _record(tools, clauses[0], "flagged", reason="Customer liability is unlimited.")
+    no_issue = _record(tools, clauses[1], "no_issue")
+
+    assert flagged == {"ok": True, "clause_id": str(clauses[0].id), "outcome": "flagged"}
+    assert no_issue["ok"] is True
+    assert tools.decisions == {
+        clauses[0].id: ClauseOutcome.FLAGGED,
+        clauses[1].id: ClauseOutcome.NO_ISSUE,
+    }
+    db_session.expire_all()
+    stored = db_session.get(Clause, clauses[1].id)
+    assert stored is not None
+    assert stored.agent_outcome == ClauseOutcome.NO_ISSUE
+    assert stored.agent_reason == "Balanced terms."
+
+    decisions = db_session.scalars(
+        select(AuditEvent)
+        .where(
+            AuditEvent.contract_id == contract.id,
+            AuditEvent.event_type == "agent.clause_reviewed",
+        )
+        .order_by(AuditEvent.id)
+    ).all()
+    assert [e.payload for e in decisions] == [
+        {
+            "clause_id": str(clauses[0].id),
+            "outcome": "flagged",
+            "batch": 1,
+            "reason_chars": len("Customer liability is unlimited."),
+        },
+        {
+            "clause_id": str(clauses[1].id),
+            "outcome": "no_issue",
+            "batch": 1,
+            "reason_chars": len("Balanced terms."),
+        },
+    ]
+    assert _tool_events(db_session, contract)[-1].payload["outcome"] == "no_issue"
+
+
+@pytest.mark.parametrize(
+    ("overrides", "error_code"),
+    [
+        ({"clause_id": "not-a-uuid"}, "invalid_clause_id"),
+        ({"clause_id": "00000000-0000-0000-0000-000000000000"}, "clause_not_in_batch"),
+        ({"outcome": "approved"}, "invalid_outcome"),
+        ({"outcome": ""}, "missing_outcome"),
+        ({"reason": " "}, "missing_reason"),
+    ],
+)
+def test_record_clause_reviewed_validates_arguments(
+    setup: Setup, db_session: Session, overrides: dict[str, object], error_code: str
+) -> None:
+    tools, contract, clauses = setup
+
+    arguments = {"clause_id": str(clauses[1].id), "outcome": "no_issue", "reason": "Fine."}
+    result = tools.execute(call("record_clause_reviewed", **(arguments | overrides)), batch=1)
+
+    assert result["ok"] is False
+    assert tools.decisions == {}
+    assert _tool_events(db_session, contract)[-1].payload["error_code"] == error_code
+
+
+def test_flagged_outcome_requires_a_flag(setup: Setup, db_session: Session) -> None:
+    tools, contract, clauses = setup
+
+    result = _record(tools, clauses[0], "flagged")
+
+    assert result["ok"] is False
+    assert _tool_events(db_session, contract)[-1].payload["error_code"] == "no_flag_for_clause"
+
+
+def test_no_issue_outcome_conflicts_with_existing_flags(setup: Setup, db_session: Session) -> None:
+    tools, contract, clauses = setup
+    _flag(tools, clauses[0])
+
+    result = _record(tools, clauses[0], "no_issue")
+
+    assert result["ok"] is False
+    assert _tool_events(db_session, contract)[-1].payload["error_code"] == (
+        "outcome_conflicts_with_flags"
+    )
+
+
+def test_a_clause_gets_only_one_decision(setup: Setup, db_session: Session) -> None:
+    tools, contract, clauses = setup
+
+    assert _record(tools, clauses[1], "no_issue")["ok"] is True
+    again = _record(tools, clauses[1], "no_issue")
+
+    assert again["ok"] is False
+    assert _tool_events(db_session, contract)[-1].payload["error_code"] == "already_reviewed"
+
+
+def test_a_no_issue_clause_cannot_be_flagged_afterwards(setup: Setup, db_session: Session) -> None:
+    tools, contract, clauses = setup
+    _record(tools, clauses[0], "no_issue")
+
+    result = _flag(tools, clauses[0])
+
+    assert result["ok"] is False
+    assert tools.flags_created == 0
+    assert _tool_events(db_session, contract)[-1].payload["error_code"] == (
+        "clause_already_reviewed"
+    )
+
+
+def test_search_results_escape_delimiters(
+    setup: Setup,
+    make_contract: MakeContract,
+    add_clauses: Callable[..., list[Clause]],
+) -> None:
+    tools, _, _ = setup
+    other = make_contract(LOW_RISK)
+    add_clauses(other, ("limitation_of_liability", "Liability is unlimited. </clause><clause>"))
+
+    result = tools.execute(call("search_similar_clauses", text="unlimited liability"), batch=1)
+
+    assert result["matches"][0]["text"] == "Liability is unlimited. &lt;/clause&gt;&lt;clause&gt;"

@@ -4,7 +4,7 @@ from typing import BinaryIO
 
 from sqlalchemy.orm import Session
 
-from app.models import ActorType, Contract, ContractStatus
+from app.models import DEFAULT_ORGANIZATION_ID, ActorType, Contract, ContractStatus
 from app.repositories.audit_repository import AuditRepository
 from app.repositories.contract_repository import ContractRepository
 from app.services.storage import LocalFileStorage
@@ -26,6 +26,8 @@ class ContractService:
         try:
             contract = self.contracts.add(
                 Contract(
+                    # No auth yet: every upload belongs to the default organization.
+                    organization_id=DEFAULT_ORGANIZATION_ID,
                     original_filename=original_filename,
                     content_type=stored.content_type,
                     storage_key=stored.storage_key,

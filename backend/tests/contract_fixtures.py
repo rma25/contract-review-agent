@@ -16,6 +16,7 @@ FIXTURES_DIR = REPO_ROOT / "evals" / "fixtures"
 HIGH_RISK = "high_risk_vendor.md"
 MEDIUM_RISK = "medium_risk_services.md"
 LOW_RISK = "low_risk_saas.md"
+INJECTION = "injection_vendor.md"
 
 
 def render_docx(md_path: Path) -> bytes:

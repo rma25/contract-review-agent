@@ -80,9 +80,12 @@ def upload_dir(tmp_path: Path) -> Path:
 
 
 @pytest.fixture
-def client(db_session: Session, upload_dir: Path) -> Iterator[TestClient]:
-    app = create_app()
+def client(
+    db_session: Session, session_factory: Callable[[], Session], upload_dir: Path
+) -> Iterator[TestClient]:
     test_settings = Settings(upload_dir=upload_dir, max_upload_mb=TEST_MAX_UPLOAD_MB)
+    # Startup work (stuck-job recovery) runs against the test transaction too.
+    app = create_app(session_factory=session_factory, settings=test_settings)
     app.dependency_overrides[get_db] = lambda: db_session
     app.dependency_overrides[get_settings] = lambda: test_settings
     with TestClient(app) as test_client:

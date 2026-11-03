@@ -12,6 +12,7 @@ from tests.agent.fake_llm import (
     FakeLLMProvider,
     ScriptedReviewer,
     call,
+    parse_batch,
     reply,
     segment_by_headings,
 )
@@ -91,9 +92,11 @@ def test_analysis_runs_end_to_end(
         "clause_count": 12,
         "clauses_reviewed": 10,
         "clauses_skipped": 2,
+        "clauses_flagged": 3,
+        "clauses_no_issue": 7,
         "batches": 2,
         "flags_created": 3,
-        "llm_calls": 1 + 3 + 3,  # segmentation + (rules, flags, finish) for both batches
+        "llm_calls": 1 + 3 + 3,  # segmentation + (rules, flags + decisions, finish) per batch
         "total_tokens": 0,
     }
 
@@ -128,7 +131,7 @@ def test_clauses_are_batched(
     ]
     assert [b["clause_count"] for b in batches] == [3, 3, 3, 1]
     # Every conversation offers only its own batch's clauses.
-    first_batch = json.loads(fake.calls[1].messages[1].content.split("\n", 1)[1])
+    first_batch = parse_batch(fake.calls[1].messages[1].content)
     assert [c["clause_id"] for c in first_batch] == batches[0]["clause_ids"]
 
 
@@ -137,43 +140,43 @@ def test_flags_outside_the_current_batch_are_rejected(
 ) -> None:
     contract = make_contract(LOW_RISK)
     holder: dict[str, str] = {}
+    reviewer = ScriptedReviewer()
 
-    def remember_and_finish(messages: list[Message], *_: object):
-        batch = json.loads(messages[1].content.split("\n", 1)[1])
-        holder.setdefault("first", batch[0]["clause_id"])
-        return reply("done")
+    def flag_a_first_batch_clause_later(messages: list[Message], *args: object):
+        batch = parse_batch(messages[1].content)
+        first = holder.setdefault("first", batch[0]["clause_id"])
+        if first not in {clause["clause_id"] for clause in batch} and len(messages) == 2:
+            return reply(
+                tool_calls=[
+                    call(
+                        "create_risk_flag",
+                        clause_id=first,
+                        rule_id="termination",
+                        severity="high",
+                        score=0.5,
+                        rationale="x",
+                    )
+                ]
+            )
+        return reviewer(messages, *args)
 
-    def flag_first_batch_clause(messages: list[Message], *_: object):
-        return reply(
-            tool_calls=[
-                call(
-                    "create_risk_flag",
-                    clause_id=holder["first"],
-                    rule_id="termination",
-                    severity="high",
-                    score=0.5,
-                    rationale="x",
-                )
-            ]
-        )
-
-    fake = FakeLLMProvider(
-        segment_by_headings,
-        remember_and_finish,
-        flag_first_batch_clause,
-        default=reply("done"),
-    )
+    fake = FakeLLMProvider(segment_by_headings, default=flag_a_first_batch_clause_later)
 
     make_runner(fake, agent_batch_size=5)(contract.id)
 
     assert _refresh(db_session, contract).status == ContractStatus.AWAITING_REVIEW
     tool_events = [e for e in _events(db_session, contract) if e.event_type == "agent.tool_call"]
-    assert [(e.payload["ok"], e.payload.get("error_code")) for e in tool_events] == [
-        (False, "clause_not_in_batch")
+    failures = [
+        (e.payload["batch"], e.payload["error_code"]) for e in tool_events if not e.payload["ok"]
     ]
-    tool_message = fake.calls[3].messages[-1]
-    assert tool_message.role == "tool"
-    assert json.loads(tool_message.content)["ok"] is False
+    assert failures == [(2, "clause_not_in_batch")]
+    rejected = next(
+        m
+        for c in fake.calls
+        for m in c.messages
+        if m.role == "tool" and m.name == "create_risk_flag"
+    )
+    assert json.loads(rejected.content)["ok"] is False
 
 
 def test_iteration_cap_stops_the_agent_and_fails_the_contract(

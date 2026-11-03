@@ -62,7 +62,11 @@ docs/       Architecture notes, ADRs
 - The pipeline is `run_analysis()` in `pipeline.py`: extract → segment (one structured-output call) → batched tool loop → `awaiting_review`. Keep it a plain function (no FastAPI imports) so it can run in Lambda.
 - Status changes go only through `ContractRepository.transition()`, which enforces `ALLOWED_TRANSITIONS` and audits. The agent never moves a contract past `awaiting_review`, and never sets a flag to anything but `pending`; `create_risk_flag` has no status argument.
 - Tools validate every argument and return `{"ok": false, "error": ...}` to the model instead of raising. Each call writes an `agent.tool_call` event; tool error messages must not echo contract text.
-- Agent audit payloads hold ids, counts, and codes only: no clause text, rationales, or search queries.
+- Agent audit payloads hold ids, counts, and codes only: no clause text, rationales, decision reasons, or search queries.
+- Contract and clause text is untrusted. Send it to the model only through `app/agent/delimiters.py` (escaped, inside `<contract>`/`<clause>` tags), and keep the untrusted-data rule in every prompt that sees it.
+- Every reviewed clause needs a `record_clause_reviewed` decision. A batch with missing decisions gets one retry, then the contract fails.
+- Queries that read other contracts must be scoped to the contract's organization; `ClauseRepository.search_similar` takes `organization_id` with no default.
+- Startup recovery (`app/services/recovery.py`) fails analyses idle past `AGENT_STUCK_TIMEOUT_MINUTES`; activity means audit events, so keep auditing long-running steps.
 - Every LLM call goes through `AgentBudget` (`before_call()` then `charge()`); limits come from the `AGENT_*` settings.
 - Tests script the model with `FakeLLMProvider` (`tests/agent/fake_llm.py`) wrapped in the real `AuditedLLMProvider`. Fixture contracts render to DOCX through `tests/contract_fixtures.py`.
 
@@ -95,5 +99,6 @@ docs/       Architecture notes, ADRs
   - CI: GitHub Actions runs ruff and pytest against Postgres 16 on pushes to main and on PRs.
   - The provider-agnostic LLM layer with Gemini, Groq and Ollama adapters.
   - The analysis agent: text extraction, clause segmentation, YAML playbook, tool-calling risk review with budgets, `POST /contracts/{id}/analyze` and `GET /contracts/{id}/flags`, and the contract status machine. See `docs/architecture.md`.
-  - Eval fixtures: three synthetic contracts and expected labels in `evals/fixtures/`.
+  - Eval fixtures: four synthetic contracts (one with prompt injection) and expected labels in `evals/fixtures/`.
+  - Agent hardening: delimited untrusted text, the coverage guarantee (`record_clause_reviewed`), organization-scoped search, the per-batch turn cap, and stuck-job recovery on startup. See "Threat model and guardrails" in `docs/architecture.md`.
 - **Not started:** human review actions (approve/edit/reject flags, `completed` status), frontend, the eval runner and metrics.

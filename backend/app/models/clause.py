@@ -6,6 +6,7 @@ from sqlalchemy.dialects.postgresql import TSVECTOR
 from sqlalchemy.orm import Mapped, mapped_column, relationship
 
 from app.models.base import Base, CreatedAtMixin, UUIDPrimaryKeyMixin
+from app.models.enums import ClauseOutcome, str_enum
 
 if TYPE_CHECKING:
     from app.models.contract import Contract
@@ -30,6 +31,12 @@ class Clause(UUIDPrimaryKeyMixin, CreatedAtMixin, Base):
     heading: Mapped[str | None] = mapped_column(String(512))
     text: Mapped[str] = mapped_column(Text)
     page_number: Mapped[int | None] = mapped_column(Integer)
+    # The agent's decision from record_clause_reviewed, with its reason for the reviewer.
+    # Null for clauses the agent did not review (no playbook rule applies).
+    agent_outcome: Mapped[ClauseOutcome | None] = mapped_column(
+        str_enum(ClauseOutcome, "clause_outcome")
+    )
+    agent_reason: Mapped[str | None] = mapped_column(Text)
     # Full-text search over heading + text, used by the agent's search_similar_clauses tool.
     search_vector: Mapped[str | None] = mapped_column(
         TSVECTOR,

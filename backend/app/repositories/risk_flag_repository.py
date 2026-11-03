@@ -21,6 +21,10 @@ class RiskFlagRepository:
         )
         return self.session.scalars(stmt).first() is not None
 
+    def exists_for_clause(self, clause_id: uuid.UUID) -> bool:
+        stmt = select(RiskFlag.id).where(RiskFlag.clause_id == clause_id)
+        return self.session.scalars(stmt).first() is not None
+
     def list_for_contract(self, contract_id: uuid.UUID) -> list[RiskFlag]:
         stmt = (
             select(RiskFlag)
