@@ -4,7 +4,7 @@ from datetime import datetime
 from pydantic import BaseModel, ConfigDict
 
 from app.models import RiskFlag
-from app.models.enums import ContractStatus, FlagStatus, Severity
+from app.models.enums import ClauseOutcome, ContractStatus, FlagStatus, Severity
 
 
 class ClauseRead(BaseModel):
@@ -16,12 +16,16 @@ class ClauseRead(BaseModel):
     heading: str | None
     text: str
     page_number: int | None
+    # The agent's decision and its reason, shown to the reviewer.
+    agent_outcome: ClauseOutcome | None
+    agent_reason: str | None
 
 
 class ContractRead(BaseModel):
     model_config = ConfigDict(from_attributes=True)
 
     id: uuid.UUID
+    organization_id: uuid.UUID
     original_filename: str
     content_type: str
     size_bytes: int

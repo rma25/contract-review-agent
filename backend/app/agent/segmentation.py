@@ -6,6 +6,7 @@ from pydantic import BaseModel, Field, ValidationError
 from sqlalchemy.orm import Session
 
 from app.agent.budget import AgentBudget, AgentError
+from app.agent.delimiters import contract_message, unescape_untrusted
 from app.agent.events import record_agent_event
 from app.llm.audited import AuditedLLMProvider
 from app.llm.types import Message
@@ -73,7 +74,7 @@ def segment_contract(
     clause_types = playbook.segmentation_types
     messages = [
         Message.system(prompt.render(clause_types=", ".join(clause_types))),
-        Message.user(raw_text),
+        Message.user(contract_message(raw_text)),
     ]
 
     budget.before_call()
@@ -91,10 +92,11 @@ def segment_contract(
         raise SegmentationError("Segmentation response did not match the schema") from None
 
     known_types = set(clause_types)
+    # The model copies text from the escaped contract, so undo the delimiter escaping.
     clauses = [
         Clause(
-            heading=item.heading.strip()[:MAX_HEADING_CHARS] or None,
-            text=item.text.strip(),
+            heading=unescape_untrusted(item.heading.strip())[:MAX_HEADING_CHARS] or None,
+            text=unescape_untrusted(item.text.strip()),
             clause_type=item.clause_type if item.clause_type in known_types else OTHER_CLAUSE_TYPE,
         )
         for item in result.clauses

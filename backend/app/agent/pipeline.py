@@ -114,6 +114,7 @@ def _analyze(
         contract_id=contract_id,
         budget=budget,
         batch_size=settings.agent_batch_size,
+        max_turns_per_batch=settings.agent_max_turns_per_batch,
     ).review(clauses)
 
     progress.stage = "finishing"
@@ -128,6 +129,8 @@ def _analyze(
             "clause_count": len(clauses),
             "clauses_reviewed": summary.clauses_reviewed,
             "clauses_skipped": summary.clauses_skipped,
+            "clauses_flagged": summary.clauses_flagged,
+            "clauses_no_issue": summary.clauses_no_issue,
             "batches": summary.batches,
             "flags_created": summary.flags_created,
             "llm_calls": budget.iterations,

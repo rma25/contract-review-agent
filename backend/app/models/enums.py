@@ -27,6 +27,13 @@ class FlagStatus(StrEnum):
     REJECTED = "rejected"
 
 
+class ClauseOutcome(StrEnum):
+    """The agent's recorded decision for a clause it reviewed."""
+
+    FLAGGED = "flagged"
+    NO_ISSUE = "no_issue"
+
+
 class ReviewDecision(StrEnum):
     APPROVE = "approve"
     EDIT = "edit"

@@ -58,6 +58,11 @@ def test_analyze_then_list_flags(client: TestClient, use_fake: UseFake) -> None:
     contract = client.get(f"/contracts/{contract_id}").json()
     assert contract["status"] == "awaiting_review"
     assert len(contract["clauses"]) == 12
+    outcomes = {c["clause_type"]: c["agent_outcome"] for c in contract["clauses"]}
+    assert outcomes["limitation_of_liability"] == "flagged"
+    assert outcomes["governing_law"] == "no_issue"
+    assert outcomes["other"] is None
+    assert contract["organization_id"] == "00000000-0000-0000-0000-000000000001"
     assert contract["clauses"][8]["heading"] == "9. Limitation of Liability"
 
     flags = client.get(f"/contracts/{contract_id}/flags")

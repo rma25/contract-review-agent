@@ -6,7 +6,7 @@ from dataclasses import dataclass
 from sqlalchemy import delete, func, select
 from sqlalchemy.orm import Session, selectinload
 
-from app.models import Clause
+from app.models import Clause, Contract
 
 # Short words rarely help ranking and only bloat the query.
 _MIN_TERM_LENGTH = 4
@@ -38,11 +38,17 @@ class ClauseRepository:
         return list(self.session.scalars(stmt))
 
     def search_similar(
-        self, text: str, *, exclude_contract_id: uuid.UUID, limit: int
+        self,
+        text: str,
+        *,
+        organization_id: uuid.UUID,
+        exclude_contract_id: uuid.UUID,
+        limit: int,
     ) -> list[SimilarClause]:
-        """Rank clauses from other contracts by full-text overlap with `text`.
+        """Rank clauses from the organization's other contracts by full-text overlap.
 
-        The text is reduced to distinct keywords OR-ed together, so a long clause still
+        `organization_id` is required so there is no way to search across tenants. The
+        text is reduced to distinct keywords OR-ed together, so a long clause still
         matches clauses that share only part of its vocabulary.
         """
         terms = keyword_terms(text)
@@ -52,6 +58,8 @@ class ClauseRepository:
         rank = func.ts_rank_cd(Clause.search_vector, query).label("rank")
         stmt = (
             select(Clause, rank)
+            .join(Clause.contract)
+            .where(Contract.organization_id == organization_id)
             .where(Clause.contract_id != exclude_contract_id)
             .where(Clause.search_vector.op("@@")(query))
             .order_by(rank.desc(), Clause.id)

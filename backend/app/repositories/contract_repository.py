@@ -1,10 +1,11 @@
 import uuid
+from datetime import timedelta
 from typing import Any
 
-from sqlalchemy import select
+from sqlalchemy import func, select
 from sqlalchemy.orm import Session, selectinload
 
-from app.models import ActorType, Contract, ContractStatus
+from app.models import ActorType, AuditEvent, Contract, ContractStatus
 from app.repositories.audit_repository import AuditRepository
 
 # The only legal status changes. Re-analysis is allowed from failed only.
@@ -51,6 +52,35 @@ class ContractRepository:
             .execution_options(populate_existing=True)
         )
         return self.session.scalars(stmt).one_or_none()
+
+    def lock_idle(
+        self, statuses: frozenset[ContractStatus], idle_timeout: timedelta
+    ) -> list[tuple[Contract, float]]:
+        """Row-lock contracts in `statuses` with no activity for `idle_timeout`.
+
+        Activity is the later of `updated_at` and the newest audit event, because every
+        LLM and tool call is audited while the contract row itself barely changes. Rows
+        locked by another transaction are skipped. Returns each contract with its idle
+        time in seconds, measured on the database clock.
+        """
+        last_event_at = (
+            select(func.max(AuditEvent.created_at))
+            .where(AuditEvent.contract_id == Contract.id)
+            .correlate(Contract)
+            .scalar_subquery()
+        )
+        # GREATEST ignores NULL, so a contract with no events falls back to updated_at.
+        last_activity = func.greatest(Contract.updated_at, last_event_at)
+        idle_seconds = func.extract("epoch", func.now() - last_activity).label("idle_seconds")
+        stmt = (
+            select(Contract, idle_seconds)
+            .where(Contract.status.in_(statuses))
+            .where(last_activity < func.now() - idle_timeout)
+            .order_by(Contract.created_at, Contract.id)
+            .with_for_update(of=Contract, skip_locked=True)
+            .execution_options(populate_existing=True)
+        )
+        return [(contract, float(idle)) for contract, idle in self.session.execute(stmt)]
 
     def transition(
         self,

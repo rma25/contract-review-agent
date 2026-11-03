@@ -4,6 +4,7 @@ The agent proposes risk flags; humans decide. It never approves a flag or a cont
 """
 
 from app.agent.budget import AgentBudget, AgentBudgetExceededError, AgentError
+from app.agent.loop import IncompleteCoverageError
 from app.agent.pipeline import AnalysisRunner, ContractTooLongError, run_analysis
 from app.agent.segmentation import SegmentationError
 
@@ -13,6 +14,7 @@ __all__ = [
     "AgentError",
     "AnalysisRunner",
     "ContractTooLongError",
+    "IncompleteCoverageError",
     "SegmentationError",
     "run_analysis",
 ]
